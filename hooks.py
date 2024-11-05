@@ -3,6 +3,7 @@ import torch.nn as nn
 
 # set up the initial hooks for all the corresponding layers
 from models import GPT, Block
+from transformers import LlamaForCausalLM
 
 
 def delete_importance_attr(layer: nn.Module):
@@ -11,55 +12,94 @@ def delete_importance_attr(layer: nn.Module):
 
 
 def remove_all_forward_hooks(model: GPT):
-    if not isinstance(model, GPT):
-        raise NotImplementedError("Only GPT models are supported for now")
+    if isinstance(model, GPT):
+        for module in model.modules():
+            if isinstance(module, Block):
+                for head in module.sa.heads:
+                    head._forward_hooks.clear()
 
-    for module in model.modules():
-        if isinstance(module, Block):
-            for head in module.sa.heads:
-                head._forward_hooks.clear()
+                    head.key._forward_hooks.clear()
+                    head.value._forward_hooks.clear()
+                    head.query._forward_hooks.clear()
 
-                head.key._forward_hooks.clear()
-                head.value._forward_hooks.clear()
-                head.query._forward_hooks.clear()
+                    delete_importance_attr(head)
 
-                delete_importance_attr(head)
+                    delete_importance_attr(head.key)
+                    delete_importance_attr(head.query)
+                    delete_importance_attr(head.value)
 
-                delete_importance_attr(head.key)
-                delete_importance_attr(head.query)
-                delete_importance_attr(head.value)
+                module.ffwd.net[0]._forward_hooks.clear()
+                module.ln1._forward_hooks.clear()
+                module.sa._forward_hooks.clear()
+                module.sa.proj._forward_hooks.clear()
+                delete_importance_attr(module.ffwd.net[0])
+                delete_importance_attr(module.ln1)
+                delete_importance_attr(module.sa)
+                delete_importance_attr(module.sa.proj)
 
-            module.ffwd.net[0]._forward_hooks.clear()
-            module.ln1._forward_hooks.clear()
-            module.sa._forward_hooks.clear()
-            module.sa.proj._forward_hooks.clear()
-            delete_importance_attr(module.ffwd.net[0])
-            delete_importance_attr(module.ln1)
-            delete_importance_attr(module.sa)
-            delete_importance_attr(module.sa.proj)
+    elif isinstance(model, LlamaForCausalLM):
+        for layer in model.model.layers:
+            layer.self_attn.o_proj._forward_hooks.clear()
+            layer.input_layernorm._forward_hooks.clear()
+            layer.post_attention_layernorm._forward_hooks.clear()
+            layer.mlp.down_proj._forward_hooks.clear()
+            delete_importance_attr(layer.self_attn.o_proj)
+            delete_importance_attr(layer.input_layernorm)
+            delete_importance_attr(layer.post_attention_layernorm)
+            delete_importance_attr(layer.mlp.down_proj)
+    else:
+        raise ValueError(f"Model type {type(model)} not supported")
 
 
-def register_all_forward_hooks(model: GPT):
-    if not isinstance(model, GPT):
-        raise NotImplementedError("Only GPT models are supported for now")
+def register_all_forward_hooks(model: nn.Module):
+    if isinstance(model, GPT):
+        num_blocks = 0
+        for module in model.modules():
+            if isinstance(module, Block):
+                num_blocks += 1
+                for head in module.sa.heads:
+                    head.register_forward_hook(attn_head_importance_hook)
 
-    num_blocks = 0
-    for module in model.modules():
-        if isinstance(module, Block):
-            num_blocks += 1
-            for head in module.sa.heads:
-                head.register_forward_hook(attn_head_importance_hook)
+                    head.key.register_forward_hook(neuron_importance_hook)
+                    head.value.register_forward_hook(neuron_importance_hook)
+                    head.query.register_forward_hook(neuron_importance_hook)
 
-                head.key.register_forward_hook(neuron_importance_hook)
-                head.value.register_forward_hook(neuron_importance_hook)
-                head.query.register_forward_hook(neuron_importance_hook)
+                module.ffwd.net[0].register_forward_hook(
+                    neuron_importance_hook
+                )  # register the forward hook to the linear layer inside of the ffwd block
+                module.sa.proj.register_forward_hook(neuron_importance_hook)
+                module.ln1.register_forward_hook(embedding_importance_hook)
+                module.register_forward_hook(block_importance_hook)
+    elif isinstance(model, LlamaForCausalLM):
+        for layer in model.model.layers:
+            # self attention
+            layer.self_attn.o_proj.register_forward_hook(aggregate_input_hook)
+            
+            # ln
+            layer.input_layernorm.register_forward_hook(aggregate_output_hook)
+            layer.post_attention_layernorm.register_forward_hook(aggregate_output_hook)
+            
+            # ffn
+            layer.mlp.down_proj.register_forward_hook(aggregate_input_hook)
+    else:
+        raise ValueError(f"Model type {type(model)} not supported")
 
-            module.ffwd.net[0].register_forward_hook(
-                neuron_importance_hook
-            )  # register the forward hook to the linear layer inside of the ffwd block
-            module.sa.proj.register_forward_hook(neuron_importance_hook)
-            module.ln1.register_forward_hook(embedding_importance_hook)
-            module.register_forward_hook(block_importance_hook)
+def aggregate_input_hook(module, ins, outs):
+    # print("Add input hook to", module.__class__.__name__)
+    scores = ins[0].detach().cpu().mean(1)
+    if hasattr(module, "calculated_importance"):
+        module.calculated_importance = torch.cat((module.calculated_importance, scores), dim=0)
+    else:
+        module.calculated_importance = scores
+
+
+def aggregate_output_hook(module, ins, outs):
+    # print("Add output hook to", module.__class__.__name__)
+    scores = outs.detach().cpu().mean(1)
+    if hasattr(module, "calculated_importance"):
+        module.calculated_importance = torch.cat((module.calculated_importance, scores), dim=0)
+    else:
+        module.calculated_importance = scores
 
 
 def attn_head_importance_hook(

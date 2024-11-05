@@ -7,7 +7,7 @@ from hyperopt import hp
 from torch.optim.adamw import AdamW
 
 from models import GPT
-from tokenizers import Tokenizer
+from custom_tokenizers import Tokenizer
 from utils import BatchLoader, architecture_search, get_model_with_importances, save, train_loop
 
 # hyperparameters
