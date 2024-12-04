@@ -1,5 +1,10 @@
 # Compact Language Models via Pruning and Knowledge Distillation
 
+## Let's prune llama
+```bash
+python main.py --config configs/config_llama1b.yaml
+```
+
 This project is an unofficial implementation of the paper [Compact Language Models via Pruning and Knowledge Distillation](https://arxiv.org/pdf/2407.14679). It explores techniques for compressing large language models (LLMs) through a combination of pruning and knowledge distillation.
 
 ## Overview

@@ -10,7 +10,7 @@ from datasets import load_dataset
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from utils_llama import prune
-
+import pickle
 device = (
     "mps"
     if torch.backends.mps.is_available()
@@ -66,7 +66,10 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     # if pad_token is not set, set it to eos_token
     if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+        tokenizer._pad_token = tokenizer.eos_token
+        print(f"Set pad_token_id to {tokenizer.pad_token_id}")
+        
     
     # prepare calibration data
     data_iter = get_calib_data_iter(
@@ -85,9 +88,10 @@ if __name__ == "__main__":
             ("width_hidden", args.width_hidden),
             ("width_intermediate", args.width_intermediate),
             ("width_attn", args.width_attn),
+            ("depth", args.depth),
         ]
     ]
-    pruned_model = prune(
+    pruned_model, keep_idx_dict = prune(
         model,
         calibration_loader=dataloader,
         device=device,
@@ -97,7 +101,7 @@ if __name__ == "__main__":
     
     # upload to HF hub
     # create repo name from base model and pruning ratios
-    repo_name = f"{args.model_name.split('/')[-1]}-pruned-h{args.width_hidden}-i{args.width_intermediate}-a{args.width_attn}"
+    repo_name = f"{args.model_name.split('/')[-1]}-pruned-h{args.width_hidden}-i{args.width_intermediate}-a{args.width_attn}-d{args.depth}"
     # repo_name = repo_name.replace(".", "_")
     
     print(f"Uploading pruned model to HF Hub as: {repo_name}")
@@ -108,3 +112,8 @@ if __name__ == "__main__":
     tokenizer.push_to_hub(repo_name)
     
     print("Upload complete!")
+    
+    # save keep_idx_dict
+    with open(f"{repo_name}.pkl", "wb") as f:
+        pickle.dump(keep_idx_dict, f)
+    print(f"Saved keep_idx_dict to: {repo_name}.pkl")

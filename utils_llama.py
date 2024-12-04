@@ -136,7 +136,7 @@ def prune(
     device: str,
     batch_agg_func: str,
     pruning_strategies: list[list[tuple[str, float | list[int] | int]]] = [
-        [("width_head", 0.1), ("width_neuron", 0.1), ("width_embedding", 0.1)]
+        [("width_head", 0.1), ("width_neuron", 0.1), ("width_embedding", 0.1), ("depth", 0.0)]
     ],
 ):
 
@@ -147,15 +147,27 @@ def prune(
     print(f"Base loss before pruning: {base_loss:.4f}")
     
     for run in range(len(pruning_strategies)):
-        print("-" * 50)
+        print(f"Run {run+1} " + "-" * 50)
+        print(f"{'Number of trainable parameters before pruning:':60}", num_params)
         strategy = pruning_strategies[run]
+        keep_idx_dict = {}
 
+        # depth pruning first
+        for i, (name, ratio) in enumerate(strategy):
+            if name == "depth":
+                depth_strategy = strategy.pop(i)
+                depth_ratio = ratio
+                break
+        print("DEPTH PRUNING | RATIO: ", depth_ratio)
+        model, idx = AVAILABLE_PRUNING_STRATEGIES["depth"](model, depth_ratio)
+        keep_idx_dict["depth"] = idx
+        
+        # width pruning
         pruning_funcs = [AVAILABLE_PRUNING_STRATEGIES[s] for s, _ in strategy]
         pruning_func_names = [s for s, _ in strategy]
         constraints = [constr for _, constr in strategy]
 
-        print(f"RUN {run+1} | RATIO: {constraints} | STRATEGIES: {pruning_func_names}")
-        print(f"{'Number of trainable parameters before pruning:':60}", num_params)
+        print(f"WIDTH PRUNING | RATIO: {constraints} | STRATEGIES: {pruning_func_names}")
                
         # run random pruning
         print("Running random pruning")
@@ -169,7 +181,8 @@ def prune(
         for f, r in zip(pruning_funcs, constraints):
             # NOTE can also save idx of pruned weights
             _, idx =f(model, r, batch_agg_func, is_random=False)
-        
+            keep_idx_dict[f.__name__] = idx
+
         print(model)
         print("-" * 100)
         pruned_model, pruned_num_params, pruned_loss = get_model_with_importances(device, model, calibration_loader)
@@ -188,7 +201,7 @@ def prune(
         remove_all_forward_hooks(pruned_model)
         
         # NOTE support one-shot pruning only for now
-        return pruned_model
+        return pruned_model, keep_idx_dict
 
 
 def save(model, tokenizer, model_params, path: str | Path) -> None:

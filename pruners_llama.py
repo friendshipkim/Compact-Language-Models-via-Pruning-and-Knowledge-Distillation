@@ -135,15 +135,42 @@ def prune_hidden(model, ratio=0.2, batch_agg="l2", is_random=False) -> None:
         
     # lm head is tied to the embedding layer
     prune_linear(model.lm_head, idx, axis="in")
-    assert torch.allclose(model.lm_head.weight.data, model.model.embed_tokens.weight.data)
+    model.tie_weights()
+    # assert torch.allclose(model.lm_head.weight.data, model.model.embed_tokens.weight.data)
     
     model.config.hidden_size = hidden_size_pruned
     print("Embeddings pruned!")
     return model, idx
 
+def prune_depth(model, ratio=0.0, strategy="first+last") -> None:
+    if ratio == 0.0:
+        return model, list(range(len(model.model.layers)))
+
+    # depth pruning is static following minitron paper
+    # first consecutive n-1 layer + last layer
+    n_layers = len(model.model.layers)
+    n_layers_kept = int((1 - ratio) * n_layers)
+    if strategy == "first+last":
+        idx = list(range(n_layers_kept - 1)) + [n_layers - 1]
+    elif strategy == "first":
+        idx = list(range(n_layers_kept))
+    elif strategy == "last":
+        idx = list(range(n_layers - n_layers_kept, n_layers))
+    elif strategy == "random":
+        idx = torch.randperm(n_layers)[:n_layers_kept]
+    else:
+        raise ValueError(f"Invalid depth pruning strategy: {strategy}")
+    
+    # prune layers
+    new_layers = nn.ModuleList([model.model.layers[i] for i in idx])
+    model.model.layers = new_layers
+    model.config.num_hidden_layers = n_layers_kept
+    print(f"Depth pruned: {n_layers} -> {n_layers_kept}")
+    return model, idx
 
 AVAILABLE_PRUNING_STRATEGIES = {
     "width_attn": prune_attn_heads,
     "width_hidden": prune_hidden,
     "width_intermediate": prune_intermediate,
+    "depth": prune_depth,
 }

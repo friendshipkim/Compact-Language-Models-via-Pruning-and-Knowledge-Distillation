@@ -1,0 +1,13 @@
+model_name: meta-llama/Llama-3.1-8B
+dataset_name: wikitext
+dataset_dir: ./dataset
+test_batch_size: 16
+max_seq_len: 512
+calib_size: 512 # change to 512
+
+# pruning parameters
+width_hidden: 0.8
+width_intermediate: 0.8
+width_attn: 0.0
+depth: 0.0
+batch_agg_func: l2
